@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
   schedule:
-    - cron: "17 */2 * * *"
+    - cron: "17 6-17 * * *"
 
   push:
     branches:
@@ -16,26 +16,63 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: actualizar-rss-almirall
+  cancel-in-progress: false
+
 jobs:
   actualizar-rss:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
+      - name: Comprobar horario de España
+        id: horario
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" != "schedule" ]]; then
+            echo "activo=true" >> "$GITHUB_OUTPUT"
+            echo "Ejecución manual o por modificación permitida."
+            exit 0
+          fi
+
+          HORA=$(TZ=Europe/Madrid date +%H)
+
+          if ((10#$HORA >= 8 && 10#$HORA <= 18)); then
+            echo "activo=true" >> "$GITHUB_OUTPUT"
+            echo "Hora española: $HORA. Se actualizará la RSS."
+          else
+            echo "activo=false" >> "$GITHUB_OUTPUT"
+            echo "Hora española: $HORA. Fuera del horario."
+          fi
+
       - name: Descargar repositorio
+        if: steps.horario.outputs.activo == 'true'
         uses: actions/checkout@v4
 
       - name: Configurar Python
+        if: steps.horario.outputs.activo == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
       - name: Generar RSS
+        if: steps.horario.outputs.activo == 'true'
         run: python almirall_rss.py
 
       - name: Guardar RSS actualizada
+        if: steps.horario.outputs.activo == 'true'
+        shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add rss.xml
-          git diff --cached --quiet || git commit -m "Actualizar RSS de Almirall"
+
+          git add --all
+
+          if git diff --cached --quiet; then
+            echo "La RSS no tiene cambios."
+            exit 0
+          fi
+
+          git commit -m "Actualizar RSS de Almirall"
           git push
